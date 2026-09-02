@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="es">
+<meta charset="utf-8">
+<title>Bolonki (1993) - JS</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  :root { color-scheme: dark; --ink:#aaa; --dim:#666; --hl:#ffff55; --edge:#3a3a48; }
+  * { box-sizing: border-box; }
+  html { height: 100%; }
+  html, body { margin:0; background:#0b0b10; color:var(--ink);
+               font:13px/1.5 ui-monospace,"DejaVu Sans Mono",Menlo,Consolas,monospace;
+               overscroll-behavior:none; -webkit-text-size-adjust:100%; }
+  body { min-height:100dvh; display:flex; flex-direction:column;
+         align-items:center; gap:6px; padding:6px 8px calc(8px + env(safe-area-inset-bottom)); }
+
+  header { text-align:center; flex:0 0 auto; }
+  h1 { font-size:15px; margin:0; color:var(--hl); letter-spacing:.14em; font-weight:600; }
+  .sub { color:var(--dim); font-size:12px; }
+
+  #stage { flex:1 1 auto; min-height:0; width:100%;
+           display:flex; align-items:center; justify-content:center; }
+  /* hugs the canvas exactly, so the overlay can be positioned against it */
+  #wrap { position:relative; line-height:0; border:2px solid #333; border-radius:3px;
+          background:#000; max-width:100%; }
+  canvas { image-rendering:pixelated; image-rendering:crisp-edges;
+           display:block; max-width:100%; background:#000; touch-action:none; }
+
+  /* ============================================ touch controls (mobile) === */
+  /* Two families of controls, both hidden unless <body> carries .mob:
+     portrait -> a pad under the screen;  landscape -> an overlay on it.      */
+  #pad, #ovl { display:none; }
+
+  /* ---- portrait: pad below the screen ---- */
+  #pad { flex:0 0 auto; width:100%; max-width:560px;
+         flex-direction:column; gap:7px; user-select:none; -webkit-user-select:none; }
+  #pad .row { display:flex; gap:7px; justify-content:center; }
+  #pad .col { display:flex; flex-direction:column; gap:7px; flex:0 0 auto; }
+  #pad button { font:inherit; background:#181820; color:#ccc;
+                border:1px solid var(--edge); border-radius:8px;
+                display:flex; flex-direction:column; align-items:center; justify-content:center;
+                line-height:1.1; padding:0; touch-action:none;
+                -webkit-tap-highlight-color:transparent; cursor:pointer; }
+  #pad button small { font-size:9px; color:var(--dim); letter-spacing:.04em; }
+  #pad button.on { background:#2f2f52; border-color:#5555ff; color:#fff; }
+  #pad .big { flex:1 1 0; min-height:104px; font-size:32px; }
+  #pad .col button { min-width:64px; min-height:48.5px; font-size:18px; }
+  #pad .row.aux button { flex:1 1 0; min-height:44px; font-size:13px; color:var(--hl); }
+
+  /* ---- landscape: semitransparent overlay across the foot of the screen ----
+     Sizes are percentages of the canvas, so they land on the same game pixels
+     at any scale. The playfield ends at y=243 of 350 and the status bar runs
+     y=287..312, so the band below y=246 is free: the arrows sit in the two
+     corners either side of the status text, clearing the colour indicator at
+     x=60..85, and the small buttons sit in the empty strip under it.        */
+  #ovl { position:absolute; left:0; right:0; bottom:1.1%; height:28.6%;
+         align-items:flex-end; justify-content:space-between;
+         padding:0 0.5%; pointer-events:none;
+         user-select:none; -webkit-user-select:none; }
+  .ov { pointer-events:auto; font:inherit; padding:0; line-height:1;
+        display:flex; align-items:center; justify-content:center;
+        border-radius:8px; cursor:pointer; touch-action:none;
+        -webkit-tap-highlight-color:transparent;
+        background:rgba(20,20,34,.38); border:1px solid rgba(150,150,215,.30);
+        color:rgba(255,255,255,.62); }
+  .ov:active, .ov.on { background:rgba(85,85,255,.62); border-color:#9a9aff; color:#fff; }
+  .ov.arrow { flex:0 0 auto; width:8.4%; min-width:40px; height:100%;
+              font-size:clamp(13px, 5.6vh, 26px); }
+  #ovl .mid { position:absolute; left:11%; right:11%; bottom:0; height:32%;
+              pointer-events:none; display:flex; gap:1.4%;
+              align-items:stretch; justify-content:center; }
+  .ov.mini  { min-width:4.4%; height:100%; padding:0 0.6%;
+              font-size:clamp(8px, 3vh, 12px); }
+
+  #rotate { display:none; color:var(--dim); font-size:11px; flex:0 0 auto; text-align:center; }
+  @media (orientation: portrait) {
+    body.mob #pad { display:flex; }
+    body.mob #rotate { display:block; }
+  }
+  @media (orientation: landscape) {
+    body.mob #ovl { display:flex; }
+    /* the screen takes the whole page: no header, no footer, no legend */
+    body.mob header, body.mob footer { display:none; }
+    body.mob { gap:0; padding:3px calc(3px + env(safe-area-inset-right))
+                          calc(3px + env(safe-area-inset-bottom))
+                          calc(3px + env(safe-area-inset-left)); }
+  }
+
+  /* hidden field that raises the phone keyboard for the level-code screen */
+  #kbd { position:fixed; bottom:0; left:0; width:1px; height:1px;
+         opacity:0.01; border:0; padding:0; background:transparent; color:transparent;
+         font-size:16px; /* keeps iOS from zooming on focus */ }
+
+  /* ================================================================ page === */
+  footer { max-width:960px; text-align:center; flex:0 0 auto; }
+  .bar { display:flex; gap:10px; justify-content:center; align-items:center; flex-wrap:wrap; }
+  button.chip { font:inherit; background:#1b1b24; color:var(--ink);
+                border:1px solid var(--edge); border-radius:3px; padding:4px 11px; cursor:pointer; }
+  button.chip:hover { border-color:#5555ff; color:#ddd; }
+  .keys { font-size:12px; color:var(--dim); line-height:1.45; margin-top:2px; }
+  .keys b { color:var(--hl); font-weight:600; }
+  .prose { color:var(--dim); font-size:12px; margin:6px auto 0; max-width:70ch; }
+  .prose summary { cursor:pointer; color:var(--ink); }
+  .prose[open] summary { margin-bottom:4px; }
+  body.mob .keys { display:none; }
+  body.mob header .sub, body.mob .prose { font-size:11px; }
+
+  @media (max-height: 560px) { header .sub, .prose { display:none; } }
+</style>
+
+<header>
+  <h1>B O L O N K I</h1>
+  <div class="sub">EAGLE Software 1993 &middot; Adrian J. Garelik &middot; QuickBASIC 4.5 &rarr; JavaScript</div>
+</header>
+
+<div id="stage">
+  <div id="wrap">
+    <canvas id="scr" width="640" height="350"></canvas>
+
+    <!-- landscape overlay: arrows in the corners, everything else tucked small -->
+    <div id="ovl">
+      <button class="ov arrow" data-key="LEFT" data-repeat aria-label="izquierda">&#9664;</button>
+      <div class="mid">
+        <button class="ov mini" data-key="UP"    aria-label="mas velocidad">&#9650;</button>
+        <button class="ov mini" data-key="DOWN"  aria-label="menos velocidad">&#9660;</button>
+        <button class="ov mini" data-key="e">E</button>
+        <button class="ov mini" data-key="c">C</button>
+        <button class="ov mini" data-key="i">I</button>
+        <button class="ov mini" data-key="s">S</button>
+        <button class="ov mini" data-key="P">P</button>
+        <button class="ov mini" data-key="ESC">ESC</button>
+        <button class="ov mini" data-key="ENTER" aria-label="ok">&#9166;</button>
+        <button class="ov mini" data-act="sfx" aria-label="sonido">&#9834;</button>
+      </div>
+      <button class="ov arrow" data-key="RIGHT" data-repeat aria-label="derecha">&#9654;</button>
+    </div>
+  </div>
+</div>
+
+<div id="rotate">&#8635; Gira el celular: en horizontal la pantalla entra completa</div>
+
+<!-- portrait pad -->
+<div id="pad">
+  <div class="row main">
+    <button class="big" data-key="LEFT"  data-repeat aria-label="izquierda">&#9664;</button>
+    <div class="col">
+      <button data-key="UP"   aria-label="mas velocidad">&#9650;</button>
+      <button data-key="DOWN" aria-label="menos velocidad">&#9660;</button>
+    </div>
+    <button class="big" data-key="RIGHT" data-repeat aria-label="derecha">&#9654;</button>
+  </div>
+  <div class="row aux">
+    <button data-key="e">E<small>jugar</small></button>
+    <button data-key="c">C<small>codigo</small></button>
+    <button data-key="i">I<small>info</small></button>
+    <button data-key="s">S<small>salir</small></button>
+    <button data-key="P">P<small>pausa</small></button>
+    <button data-key="ESC">ESC<small>nivel</small></button>
+    <button data-key="ENTER">&#9166;<small>ok</small></button>
+  </div>
+</div>
+
+<input id="kbd" type="text" inputmode="text" autocapitalize="characters"
+       autocomplete="off" autocorrect="off" spellcheck="false" aria-label="codigo de nivel">
+
+<footer>
+  <div class="bar">
+    <button class="chip" id="sfx">Sonido: ON</button>
+    <button class="chip" id="zoom">Zoom: auto</button>
+    <button class="chip" id="padtoggle">Controles tactiles</button>
+  </div>
+  <div class="keys">
+    <b>&larr; &rarr;</b> mover &middot; <b>&uarr; &darr;</b> velocidad &middot;
+    <b>P</b> pausa &middot; <b>ESC</b> reiniciar nivel &middot;
+    <b>E</b> empezar &middot; <b>C</b> codigo &middot; <b>I</b> info &middot; <b>S</b> salir
+  </div>
+  <details class="prose">
+    <summary>Como se juega</summary>
+    Rebotas sin parar entre el techo y el piso. Los bloques lisos se rompen solo si tu color
+    coincide (el color esta abajo a la izquierda); los bloques con una X te repintan.
+    Rompe todos los bloques lisos para pasar de nivel. Las calaveras matan, el ladrillo rebota,
+    las banderas borran todas las calaveras del tablero y cada 50 monedas de oro hay bonus.
+    Moverse de costado da un paso por cada caida, asi que la flecha se puede mantener apretada.
+  </details>
+</footer>
+
+<script src="assets.js"></script>
+<script src="game.js"></script>
+</html>
