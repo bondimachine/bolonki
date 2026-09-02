@@ -116,32 +116,113 @@ function qbNum(v) {
 
 /* ----------------------------------------------------------------- sound ---
    SOUND freq, duration  (duration in 18.2 Hz clock ticks). QuickBASIC queues
-   notes in the background, so these are scheduled rather than blocking.     */
+   notes in the background, so these are scheduled rather than blocking.
 
-let ac = null, sndAt = 0;
-function audioOn() {
-  if (!ac) {
-    try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; }
-  }
-  /* phones hand back a suspended context until a real gesture resumes it */
-  if (ac && ac.state === 'suspended') ac.resume().catch(() => {});
+   Safari on iOS asks for more than desktop browsers do:
+     1. the context has to be created AND resumed inside a real user gesture;
+     2. something has to actually be played through it once inside that
+        gesture, or it stays mute - a one-sample silent buffer is enough;
+     3. the ringer switch silences Web Audio unless the page claims a
+        'playback' audio session (Safari 16.4+). Before that API existed the
+        only lever was a looping silent <audio> element, which flips the same
+        session category, so that is the fallback;
+     4. an oscillator started at exactly currentTime gets dropped, so notes
+        are always scheduled a little ahead.
+   And notes must never be banked against a frozen clock: while the context
+   is suspended currentTime does not advance, so accumulating sndAt would run
+   past the queue window and silence everything from then on.               */
+
+const SILENT_WAV = 'data:audio/wav;base64,UklGRuwAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YcgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+
+let ac = null, master = null, sndAt = 0, unlocked = false, sessionAsked = false, quiet = null;
+const LOOKAHEAD = 0.03;
+
+/* iPhone / iPad, including iPadOS which reports itself as a Mac */
+const APPLE_TOUCH = !/Android/.test(navigator.userAgent) &&
+                    (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+
+function claimPlaybackSession() {
+  if (sessionAsked) return;
+  sessionAsked = true;
+  try {
+    if (navigator.audioSession) { navigator.audioSession.type = 'playback'; return; }
+  } catch (e) { /* fall through to the element trick */ }
+  if (!APPLE_TOUCH) return;               /* nothing else needs this */
+  try {                                   /* iOS before 16.4 */
+    quiet = document.createElement('audio');
+    quiet.src = SILENT_WAV;
+    quiet.loop = true;
+    quiet.volume = 0.0001;
+    quiet.setAttribute('playsinline', '');
+    quiet.style.display = 'none';
+    document.body.appendChild(quiet);     /* Safari is happier with it attached */
+    const p = quiet.play();
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) {}
 }
+
+function audioOn() {
+  claimPlaybackSession();                 /* must happen inside the gesture */
+  if (!ac) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    try { ac = new Ctx({latencyHint: 'interactive'}); }
+    catch (e) { try { ac = new Ctx(); } catch (e2) { return; } }
+    if (ac.addEventListener) ac.addEventListener('statechange', syncSound);
+    master = ac.createGain();             /* single tap point for every note */
+    master.gain.value = 1;
+    master.connect(ac.destination);
+  }
+  if (ac.state !== 'running' && ac.resume) {
+    const p = ac.resume();
+    if (p && p.then) p.then(syncSound, () => {});
+  }
+  if (!unlocked) {                        /* play one silent sample */
+    try {
+      const src = ac.createBufferSource();
+      src.buffer = ac.createBuffer(1, 1, ac.sampleRate);
+      src.connect(ac.destination);
+      src.start(0);
+      unlocked = true;
+    } catch (e) {}
+  }
+  if (quiet && quiet.paused) { const p = quiet.play(); if (p && p.catch) p.catch(() => {}); }
+  syncSound();
+}
+
 function sound(freq, ticks) {
-  if (!ac || !window.SFX_ON) return;
-  const dur = Math.max(0.004, ticks / 18.2);
+  if (!window.SFX_ON || !ac || ac.state !== 'running') return;
+  const dur = Math.max(0.006, ticks / 18.2);
   const now = ac.currentTime;
-  if (sndAt < now) sndAt = now;
+  if (sndAt < now + LOOKAHEAD) sndAt = now + LOOKAHEAD;
   if (sndAt > now + 0.45) return;                /* QB's note queue is finite  */
   const o = ac.createOscillator(), g = ac.createGain();
-  o.type = 'square'; o.frequency.value = Math.max(37, Math.min(20000, freq));
-  g.gain.value = 0.0;
-  g.gain.setValueAtTime(0.075, sndAt);
-  g.gain.setValueAtTime(0.075, sndAt + dur*0.85);
-  g.gain.linearRampToValueAtTime(0.0, sndAt + dur);
-  o.connect(g); g.connect(ac.destination);
-  o.start(sndAt); o.stop(sndAt + dur + 0.01);
+  o.type = 'square';
+  o.frequency.value = Math.max(37, Math.min(20000, freq));
+  g.gain.setValueAtTime(0.0001, sndAt);
+  g.gain.exponentialRampToValueAtTime(0.075, sndAt + 0.004);
+  g.gain.setValueAtTime(0.075, Math.max(sndAt + 0.005, sndAt + dur * 0.8));
+  g.gain.exponentialRampToValueAtTime(0.0001, sndAt + dur);
+  o.connect(g); g.connect(master || ac.destination);
+  o.start(sndAt); o.stop(sndAt + dur + 0.02);
   sndAt += dur;
 }
+
+/* Keep the labels honest about whether audio is actually live, and pick the
+   context back up after an iOS interruption (a call, or backgrounding). */
+function syncSound() {
+  const on   = !!window.SFX_ON;
+  const live = on && ac && ac.state === 'running';
+  const chip = document.getElementById('sfx');
+  if (chip) chip.textContent = 'Sonido: ' + (!on ? 'OFF' : live ? 'ON' : 'ON (toca para activar)');
+  for (const el of document.querySelectorAll('[data-act="sfx"]')) el.classList.toggle('muted', !on);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && ac && ac.state !== 'running' && ac.resume) {
+    const p = ac.resume(); if (p && p.then) p.then(syncSound, () => {});
+  }
+});
 function sweep(from, to, step, ticks) {          /* FOR f = a TO b STEP s: SOUND f,t */
   if (step > 0) for (let f = from; f <= to; f += step) sound(f, ticks);
   else          for (let f = from; f >= to; f += step) sound(f, ticks);
@@ -811,6 +892,7 @@ addEventListener('unhandledrejection', e => console.error('BOLONKI reject', e.re
 async function main() {
   buildFont();
   window.SFX_ON = true;
+  syncSound();
   await splash();
   await loadingScreen();
   for (;;) {
@@ -907,7 +989,8 @@ function applyControls() {
 
 function toggleSound() {
   window.SFX_ON = !window.SFX_ON;
-  if (btn) btn.textContent = 'Sonido: ' + (window.SFX_ON ? 'ON' : 'OFF');
+  if (window.SFX_ON) audioOn();          /* the tap that turned it on unlocks it */
+  else syncSound();
 }
 
 const btn = document.getElementById('sfx');
@@ -915,6 +998,7 @@ const padBtn = document.getElementById('padtoggle');
 const zoomBtn = document.getElementById('zoom');
 
 if (btn) btn.onclick = () => { toggleSound(); btn.blur(); };
+syncSound();
 if (zoomBtn) zoomBtn.onclick = () => {
   /* offer only sizes this window can actually show, so the chip never
      advertises a scale that fit() would then clamp away */

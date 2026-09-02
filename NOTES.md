@@ -74,7 +74,16 @@ level content.
   taste.
 - **Queued sound.** `SOUND` blocks in QuickBASIC once its note buffer fills.
   Here notes are scheduled on a Web Audio square wave and dropped if more than
-  0.45 s is already queued, which is close to the 32-note DOS buffer.
+  0.45 s is already queued, which is close to the 32-note DOS buffer. Safari on
+  iOS needs four things that other browsers do not, all handled in `audioOn`:
+  the context created *and* resumed inside a real gesture; something actually
+  played through it once inside that gesture (a one-sample silent buffer); an
+  audio session of `playback`, or the ringer switch silences Web Audio
+  (`navigator.audioSession` on 16.4+, a looping silent `<audio>` element
+  before that); and notes scheduled ~30 ms ahead, because WebKit drops an
+  oscillator started at exactly `currentTime`. `sound()` also refuses to
+  schedule while the context is not running - `currentTime` is frozen then, so
+  banking `sndAt` against it would push every later note past the queue window.
 - **The trapped-ball loop.** `L5B31` reads only the arrow keys, so a ball with
   no sideways escape locked the original up for good. The port also honours
   ESC, S and C there, so the level can be restarted.

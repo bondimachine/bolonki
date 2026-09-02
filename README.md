@@ -43,6 +43,13 @@ score and colour indicator all stay clear.
 **Portrait** puts a pad under the screen with large thumb buttons, and says
 that turning the phone gives the screen a lot more room.
 
+Sound needs one tap before iOS will allow it, so the *Sonido* chip says
+`ON (toca para activar)` until the audio context is actually running — if it
+still says that after you have tapped, audio is being blocked rather than
+merely silent. On iOS the page claims a `playback` audio session so the ringer
+switch does not mute the game; on iOS before 16.4 it falls back to a looping
+silent element, which has the same effect.
+
 Either way: left/right repeat while held, up/down change speed, and the row of
 letters is the menu — E, C, I, S, P, ESC, an OK for confirming level codes, and
 a sound toggle in landscape. Pressing C raises the phone keyboard so a code can
